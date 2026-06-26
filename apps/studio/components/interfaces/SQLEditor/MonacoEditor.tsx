@@ -1,16 +1,16 @@
-import { Monaco, OnMount } from '@monaco-editor/react'
+import Editor, { Monaco, OnMount } from '@monaco-editor/react'
 import { useDebounce } from '@uidotdev/usehooks'
 import { LOCAL_STORAGE_KEYS, useParams } from 'common'
-import { noop } from 'lodash'
 import { useRouter } from 'next/router'
-import { RefObject, useEffect, useRef, useState } from 'react'
+import { MutableRefObject, useEffect, useRef, useState } from 'react'
+import { cn } from 'ui'
 import { Admonition } from 'ui-patterns'
+import { useSetCommandMenuOpen } from 'ui-patterns/CommandMenu'
 
 import type { IStandaloneCodeEditor } from './SQLEditor.types'
 import { createSqlSnippetSkeletonV2 } from './SQLEditor.utils'
 import { SIDEBAR_KEYS } from '@/components/layouts/ProjectLayout/LayoutSidebar/LayoutSidebarProvider'
 import { getEditorSelectionParts } from '@/components/ui/AIEditor/utils'
-import { CodeEditor } from '@/components/ui/CodeEditor/CodeEditor'
 import { useLocalStorageQuery } from '@/hooks/misc/useLocalStorage'
 import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
 import { useProfile } from '@/lib/profile'
@@ -19,17 +19,14 @@ import { SHORTCUT_IDS } from '@/state/shortcuts/registry'
 import { useIsShortcutEnabled } from '@/state/shortcuts/useIsShortcutEnabled'
 import { useSidebarManagerSnapshot } from '@/state/sidebar-manager-state'
 import { useSqlEditorV2StateSnapshot } from '@/state/sql-editor-v2'
-import { wasNeverPersisted } from '@/state/sql-editor/sql-editor-lifecycle'
-import { canEditSnippet } from '@/state/sql-editor/sql-editor-rules'
-import { useSqlEditorSaveCoordinator } from '@/state/sql-editor/sql-editor-save-coordinator'
 import { useTabsStateSnapshot } from '@/state/tabs'
 
 export type MonacoEditorProps = {
   id: string
   snippetName: string
   className?: string
-  editorRef: RefObject<IStandaloneCodeEditor | null>
-  monacoRef: RefObject<Monaco | null>
+  editorRef: MutableRefObject<IStandaloneCodeEditor | null>
+  monacoRef: MutableRefObject<Monaco | null>
   autoFocus?: boolean
   executeQuery: () => void
   executeExplainQuery: () => void
@@ -47,7 +44,7 @@ export type MonacoEditorProps = {
   placeholder?: string
 }
 
-export const MonacoEditor = ({
+const MonacoEditor = ({
   id,
   snippetName,
   editorRef,
@@ -77,12 +74,20 @@ export const MonacoEditor = ({
     LOCAL_STORAGE_KEYS.SQL_EDITOR_INTELLISENSE,
     true
   )
+  const isAIAssistantHotkeyEnabled = useIsShortcutEnabled(SHORTCUT_IDS.AI_ASSISTANT_TOGGLE)
+  const isCommandMenuHotkeyEnabled = useIsShortcutEnabled(SHORTCUT_IDS.COMMAND_MENU_OPEN)
+  const setCommandMenuOpen = useSetCommandMenuOpen()
 
+  // [Joshen] Lodash debounce doesn't seem to be working here, so opting to use useDebounce
   const [value, setValue] = useState('')
   const debouncedValue = useDebounce(value, 1000)
 
   const snippet = snapV2.snippets[id]
-  const disableEdit = !!snippet && !canEditSnippet(snippet.snippet, profile?.id)
+  const disableEdit =
+    snippet?.snippet.visibility === 'project' && snippet?.snippet.owner_id !== profile?.id
+
+  const executeQueryRef = useRef(executeQuery)
+  executeQueryRef.current = executeQuery
 
   const executeExplainQueryRef = useRef(executeExplainQuery)
   executeExplainQueryRef.current = executeExplainQuery
@@ -90,18 +95,22 @@ export const MonacoEditor = ({
   const prettifyQueryRef = useRef(prettifyQuery)
   prettifyQueryRef.current = prettifyQuery
 
-  const isAIAssistantHotkeyEnabled = useIsShortcutEnabled(SHORTCUT_IDS.AI_ASSISTANT_TOGGLE)
   const aiHotkeyEnabledRef = useRef(isAIAssistantHotkeyEnabled)
   aiHotkeyEnabledRef.current = isAIAssistantHotkeyEnabled
 
-  const { requestSave } = useSqlEditorSaveCoordinator()
-  const requestSaveRef = useRef(requestSave)
-  requestSaveRef.current = requestSave
+  const commandMenuHotkeyEnabledRef = useRef(isCommandMenuHotkeyEnabled)
+  commandMenuHotkeyEnabledRef.current = isCommandMenuHotkeyEnabled
 
-  const handleEditorOnMount: OnMount = (editor, monaco) => {
-    const model = editor.getModel()
+  const setCommandMenuOpenRef = useRef(setCommandMenuOpen)
+  setCommandMenuOpenRef.current = setCommandMenuOpen
+
+  const handleEditorOnMount: OnMount = async (editor, monaco) => {
+    editorRef.current = editor
+    monacoRef.current = monaco
+
+    const model = editorRef.current.getModel()
     if (model !== null) {
-      monaco.editor.setModelMarkers(model, 'owner', [])
+      monacoRef.current.editor.setModelMarkers(model, 'owner', [])
     }
 
     // Blur the editor on Escape so users can hop out to the rest of the UI.
@@ -127,6 +136,17 @@ export const MonacoEditor = ({
       ].join(' && ')
     )
 
+    editor.addAction({
+      id: 'run-query',
+      label: 'Run Query',
+      keybindings: [monaco.KeyMod.CtrlCmd + monaco.KeyCode.Enter],
+      contextMenuGroupId: 'operation',
+      contextMenuOrder: 0,
+      run: () => {
+        executeQueryRef.current()
+      },
+    })
+
     if (showExplainAction) {
       editor.addAction({
         id: 'run-explain-query',
@@ -147,7 +167,7 @@ export const MonacoEditor = ({
       contextMenuGroupId: 'operation',
       contextMenuOrder: 0,
       run: () => {
-        if (snippet) requestSaveRef.current(snippet.snippet.id)
+        if (snippet) snapV2.addNeedsSaving(snippet.snippet.id)
       },
     })
 
@@ -168,15 +188,13 @@ export const MonacoEditor = ({
       contextMenuGroupId: 'operation',
       contextMenuOrder: 1,
       run: () => {
-        const selection = editorRef?.current?.getSelection()
-        if (!selection) return
-
-        const selectedValue = editorRef?.current?.getModel()?.getValueInRange(selection)
-
+        const selectedValue = (editorRef?.current as any)
+          .getModel()
+          .getValueInRange((editorRef?.current as any)?.getSelection())
         openSidebar(SIDEBAR_KEYS.AI_ASSISTANT)
         aiSnap.newChat({
           name: 'Explain code section',
-          sqlSnippets: [selectedValue ?? ''],
+          sqlSnippets: [selectedValue],
           initialInput: 'Can you explain this section to me in more detail?',
         })
       },
@@ -205,12 +223,26 @@ export const MonacoEditor = ({
       })
     }
 
+    // Monaco claims Cmd+K as a chord prefix, which swallows the global command
+    // menu shortcut while the editor is focused. Intercept it here and open the
+    // command menu directly so it works the same inside and outside the editor.
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, () => {
+      if (commandMenuHotkeyEnabledRef.current) {
+        setCommandMenuOpenRef.current(true)
+      }
+    })
+
     editor.onDidChangeCursorSelection(({ selection }) => {
       const noSelection =
         selection.startLineNumber === selection.endLineNumber &&
         selection.startColumn === selection.endColumn
       onHasSelection(!noSelection)
     })
+
+    if (autoFocus) {
+      if (editor.getValue().length === 1) editor.setPosition({ lineNumber: 1, column: 2 })
+      editor.focus()
+    }
 
     onMount?.(editor)
   }
@@ -231,7 +263,7 @@ export const MonacoEditor = ({
         // than push. The caller navigated to `/sql/new?content=...` (a long,
         // one-shot URL); replacing collapses it out of history so Back returns to
         // the originating page instead of a wasted step that re-seeds the snippet.
-        if (router.query.content !== undefined) {
+        if (router.query.content) {
           router.replace(`/project/${ref}/sql/${snippet.id}`, undefined, { shallow: true })
         } else {
           router.push(`/project/${ref}/sql/${snippet.id}`, undefined, { shallow: true })
@@ -243,7 +275,7 @@ export const MonacoEditor = ({
 
   useEffect(() => {
     if (debouncedValue.length > 0 && snippet) {
-      const shouldInvalidate = wasNeverPersisted(snippet.snippet.status)
+      const shouldInvalidate = snippet.snippet.isNotSavedInDatabaseYet
       snapV2.setSql({ id, sql: value, shouldInvalidate })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -265,26 +297,29 @@ export const MonacoEditor = ({
           description="This snippet has been shared to the project and is only editable by the owner who created this snippet. You may duplicate this snippet into a personal copy by right clicking on the snippet and selecting “Duplicate query”."
         />
       )}
-      <CodeEditor
-        id={id}
-        language="pgsql"
-        className={className}
-        autofocus={autoFocus}
-        isReadOnly={disableEdit}
+      <Editor
+        className={cn(className, 'monaco-editor')}
+        theme={'supabase'}
+        onMount={handleEditorOnMount}
+        onChange={handleEditorChange}
+        defaultLanguage="pgsql"
         defaultValue={snippet?.snippet.content?.unchecked_sql}
-        editorRef={editorRef}
-        monacoRef={monacoRef}
-        actions={{
-          runQuery: { enabled: true, callback: executeQuery },
-          formatDocument: { enabled: false, callback: noop },
-          placeholderFill: { enabled: false },
-        }}
+        path={id}
         options={{
+          tabSize: 2,
+          fontSize: 13,
           placeholder,
           lineDecorationsWidth: 0,
-          fixedOverflowWidgets: false,
-          lineNumbersMinChars: 5,
-          scrollBeyondLastLine: true,
+          readOnly: disableEdit,
+          minimap: { enabled: false },
+          wordWrap: 'on',
+          padding: { top: 4 },
+          // [Joshen] Commenting the following out as it causes the autocomplete suggestion popover
+          // to be positioned wrongly somehow. I'm not sure if this affects anything though, but leaving
+          // comment just in case anyone might be wondering. Relevant issues:
+          // - https://github.com/microsoft/monaco-editor/issues/2229
+          // - https://github.com/microsoft/monaco-editor/issues/2503
+          // fixedOverflowWidgets: true,
           suggest: {
             showMethods: intellisenseEnabled,
             showFunctions: intellisenseEnabled,
@@ -316,9 +351,9 @@ export const MonacoEditor = ({
             showSnippets: intellisenseEnabled,
           },
         }}
-        onInputChange={handleEditorChange}
-        onMount={handleEditorOnMount}
       />
     </>
   )
 }
+
+export default MonacoEditor
