@@ -27,14 +27,14 @@
 
 services:
   kong:
-    ports:
+    ports: !override
       # Single API front door (Studio, REST, Auth, Storage, Realtime, Functions).
       # Loopback-only for the gated internal stage.
       - "127.0.0.1:${KONG_HTTP_PORT:-8000}:8000/tcp"
       - "127.0.0.1:${KONG_HTTPS_PORT:-8443}:8443/tcp"
 
   supavisor:
-    ports:
+    ports: !override
       # Connection pooler: session (5432) + transaction (6543), loopback-only.
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
       - "127.0.0.1:${POOLER_PROXY_PORT_TRANSACTION:-6543}:6543"

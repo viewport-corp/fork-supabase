@@ -77,6 +77,25 @@ Keep `COMPOSE_FILE=docker-compose.yml` (base only).
 
 All secrets go into the Dokploy env store — never into this branch.
 
+
+## CRITICAL — port env vars must be BARE numbers; loopback comes from the overlay
+
+`POSTGRES_PORT` is dual-purpose in the base compose: it is the supavisor host
+port mapping AND the Postgres server `PGPORT` / all internal connection URLs
+(`db:${POSTGRES_PORT}`). Putting a host-IP prefix in it
+(`POSTGRES_PORT=127.0.0.1:5432`) makes Postgres fail at init with
+`FATAL: invalid value for parameter "port"`, so the whole stack aborts on the
+`db` healthcheck.
+
+Therefore:
+- Env port vars stay BARE: `POSTGRES_PORT=5432`, `POOLER_PROXY_PORT_TRANSACTION=6543`,
+  `KONG_HTTP_PORT=8000`, `KONG_HTTPS_PORT=8443`.
+- Loopback binding is applied ONLY by the overlay, which uses `ports: !override`
+  so it REPLACES the base ports list (a plain merge would APPEND, leaving the
+  public `0.0.0.0` mapping in place and double-binding the port).
+- Deploy BOTH files via the chain env var (Dokploy composePath is single-file):
+  `COMPOSE_FILE=docker/docker-compose.yml:deploy/docker-compose.yml`
+
 ## Deploy via Dokploy API (Stage 2 plan)
 
 Auth: `x-api-key: $DOKPLOY_API_KEY` (from `/srv/viewport/secrets/platformx.env`)
