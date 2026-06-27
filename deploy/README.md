@@ -93,8 +93,11 @@ Therefore:
 - Loopback binding is applied ONLY by the overlay, which uses `ports: !override`
   so it REPLACES the base ports list (a plain merge would APPEND, leaving the
   public `0.0.0.0` mapping in place and double-binding the port).
-- Deploy BOTH files via the chain env var (Dokploy composePath is single-file):
-  `COMPOSE_FILE=docker/docker-compose.yml:deploy/docker-compose.yml`
+- Deploy ONE file: `deploy/docker-compose.deploy.yml`. It uses Compose
+  `include:` to pull in the untouched base and `ports: !override` to replace the
+  two host port lists with loopback-only bindings. (Dokploy passes an explicit
+  `-f <composePath>`, which ignores the `COMPOSE_FILE` env chain and a second
+  `-f` overlay — so a single self-contained file is required.)
 
 ## Deploy via Dokploy API (Stage 2 plan)
 
@@ -108,7 +111,7 @@ against `http://194.163.153.171:3001`. New engine only
 2. `POST /api/compose.create` — `{ name, appName, projectId, environmentId,
    composeType: "docker-compose" }` -> `composeId`.
 3. `POST /api/compose.update` — `sourceType: git` pointing at this fork
-   `viewport/deploy`, `composePath: docker/docker-compose.yml`; supply the full
+   `viewport/deploy`, `composePath: deploy/docker-compose.deploy.yml`; supply the full
    secret `env` block. (Use the overlay for loopback override when applied.)
 4. `POST /api/compose.deploy` — `{ composeId }`; then poll `compose.one` /
    `readLogs` and `docker ps` on the new engine.
