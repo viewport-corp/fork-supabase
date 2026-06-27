@@ -1,10 +1,11 @@
 # Viewport LLC — self-contained deploy compose for self-hosted Supabase (#410).
 # AUTO-DERIVED from ../docker/docker-compose.yml (upstream source of truth) with
 # ONLY two surgical changes for the gated internal stage:
-#   1. The 4 host port mappings (kong 8000/8443, supavisor 5432/6543) are prefixed
-#      127.0.0.1: so they bind loopback-only (no public edge). Port ENV vars stay
-#      bare numbers (POSTGRES_PORT=5432 etc.) so they remain valid as PGPORT and
-#      internal db connection URLs.
+#   1. The 4 host port mappings bind 127.0.0.1 on a DEDICATED host-port block via
+#      HOST_* vars (kong 54320/54321, supavisor 54322/54323) to avoid host-port
+#      contention with other Postgres/pooler stacks on this engine. Container-side
+#      ports stay 8000/8443/5432/6543 and internal port ENV vars stay bare so PGPORT
+#      and internal db connection URLs remain valid.
 #   2. Relative bind mounts ./volumes -> ../docker/volumes so config/data still
 #      resolve to the docker/ tree (this file lives in deploy/).
 # Single file => single Dokploy -f composePath, no include/override merge ambiguity.
@@ -93,8 +94,8 @@ services:
       studio:
         condition: service_healthy
     ports:
-      - 127.0.0.1:${KONG_HTTP_PORT}:8000/tcp
-      - 127.0.0.1:${KONG_HTTPS_PORT}:8443/tcp
+      - 127.0.0.1:${HOST_KONG_HTTP:-54320}:8000/tcp
+      - 127.0.0.1:${HOST_KONG_HTTPS:-54321}:8443/tcp
     volumes:
       - ../docker/volumes/api/kong.yml:/home/kong/temp.yml:ro,z
       - ../docker/volumes/api/kong-entrypoint.sh:/home/kong/kong-entrypoint.sh:ro,z
@@ -544,8 +545,8 @@ services:
     image: supabase/supavisor:2.9.5
     restart: unless-stopped
     ports:
-      - 127.0.0.1:${POSTGRES_PORT}:5432
-      - 127.0.0.1:${POOLER_PROXY_PORT_TRANSACTION}:6543
+      - 127.0.0.1:${HOST_PG_SESSION:-54322}:5432
+      - 127.0.0.1:${HOST_PG_TXN:-54323}:6543
     volumes:
       - ../docker/volumes/pooler/pooler.exs:/etc/pooler/pooler.exs:ro,z
     healthcheck:

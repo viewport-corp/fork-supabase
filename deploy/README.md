@@ -36,8 +36,12 @@ the logs / s3 / proxy overlays.
 
 Only two services publish ports. The overlay narrows both to `127.0.0.1`:
 
-- kong: `127.0.0.1:8000` (single API front door) + `127.0.0.1:8443`
-- supavisor: `127.0.0.1:5432` (session) + `127.0.0.1:6543` (transaction)
+- kong: host `127.0.0.1:54320` -> 8000 (API front door) + `127.0.0.1:54321` -> 8443
+- supavisor: host `127.0.0.1:54322` -> 5432 (session) + `127.0.0.1:54323` -> 6543 (txn)
+
+Host ports use a dedicated 5432x loopback block (HOST_* env vars) because this
+engine already runs several Postgres/pooler stacks bound to 127.0.0.1:5432/5433/5434
+and :6543. Container-side ports are unchanged; internal clients still use db:5432.
 
 ## Persistence
 
