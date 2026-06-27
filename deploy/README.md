@@ -93,11 +93,14 @@ Therefore:
 - Loopback binding is applied ONLY by the overlay, which uses `ports: !override`
   so it REPLACES the base ports list (a plain merge would APPEND, leaving the
   public `0.0.0.0` mapping in place and double-binding the port).
-- Deploy ONE file: `deploy/docker-compose.deploy.yml`. It uses Compose
-  `include:` to pull in the untouched base and `ports: !override` to replace the
-  two host port lists with loopback-only bindings. (Dokploy passes an explicit
-  `-f <composePath>`, which ignores the `COMPOSE_FILE` env chain and a second
-  `-f` overlay — so a single self-contained file is required.)
+- Deploy ONE file: `deploy/docker-compose.deploy.yml`. It is AUTO-DERIVED from
+  the untouched base (`docker/docker-compose.yml`) with only two surgical edits:
+  the 4 host port mappings are prefixed `127.0.0.1:` (loopback-only) and the
+  relative bind mounts `./volumes` become `../docker/volumes`. A single
+  self-contained file is required because Dokploy passes one explicit
+  `-f <composePath>` (it ignores the `COMPOSE_FILE` env chain), and Compose
+  `include:` does NOT honor a top-level `ports: !override` (the override appends
+  instead of replacing, leaving a public 0.0.0.0 binding).
 
 ## Deploy via Dokploy API (Stage 2 plan)
 
